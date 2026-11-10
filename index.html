@@ -154,7 +154,13 @@ canvas{display:block;width:100%;height:100%;touch-action:none}
 
 <script>
 (()=>{
-const MAPS=[{id:'bakurani',name:'Bakurani'},{id:'ozeti',name:'Ozeti'},{id:'zestafona',name:'Zestafona'}];
+/* Standard map images on the website: put them in the "maps" folder of the repo.
+   width = how many metres the image covers from left to right (null = calibrate yourself). */
+const MAPS=[
+  {id:'bakurani', name:'Bakurani',  file:'maps/bakurani',  width:1233},
+  {id:'ozeti',    name:'Ozeti',     file:'maps/ozeti',     width:1338},
+  {id:'zestafona',name:'Zestafona', file:'maps/zestafona', width:1156}];
+const EXTS=['jpg','jpeg','png','webp'];
 const TOOLS=[
   {id:'base1',name:'Fiende lag 1',k:'1'},{id:'base2',name:'Fiende lag 2',k:'2'},{id:'home',name:'Vår base',k:'3'},
   {id:'zone',name:'Sirkel',k:'4'},{id:'mortar',name:'Mortar',k:'5'},{id:'target',name:'Mål',k:'6'},
@@ -168,7 +174,7 @@ let tool='base1', drag=null, ruler=null, calib=[], hover=null, pending=null;
 
 const $=id=>document.getElementById(id);
 const cv=$('cv'), ctx=cv.getContext('2d'), main=$('main');
-function M(){ if(!S.maps[S.cur]) S.maps[S.cur]={mapW:4000,zone:null,targets:[],mortars:[],view:null,suggest:null}; const m=S.maps[S.cur]; if(!m.bases) m.bases=[]; if(m.home===undefined) m.home=null; return m; }
+function M(){ if(!S.maps[S.cur]) S.maps[S.cur]={mapW:(MAPS.find(x=>x.id===S.cur)||{}).width||4000,zone:null,targets:[],mortars:[],view:null,suggest:null}; const m=S.maps[S.cur]; if(!m.bases) m.bases=[]; if(m.home===undefined) m.home=null; return m; }
 /* everything the mortar should reach: enemy bases (+ own targets unless onlyBases) */
 function aims(m,onlyBases){ const out=[], cnt={1:0,2:0}, seen={1:0,2:0}; m.bases.forEach(b=>cnt[b.team]++);
   m.bases.forEach((b,i)=>{ seen[b.team]++; out.push({x:b.x,y:b.y,lab:'Lag '+b.team+(cnt[b.team]>1?' #'+seen[b.team]:''),col:COL[b.team],kind:'base',i}); });
@@ -182,13 +188,23 @@ function toast(t){const el=$('toast'); el.textContent=t; el.style.opacity=1; cle
 let dbP=null;
 function db(){ if(dbP) return dbP; dbP=new Promise((res,rej)=>{try{const r=indexedDB.open('wardogs-mortar',1); r.onupgradeneeded=()=>r.result.createObjectStore('img'); r.onsuccess=()=>res(r.result); r.onerror=()=>rej(r.error);}catch(e){rej(e)}}); return dbP; }
 async function idb(op,id,val){ try{const d=await db(); return await new Promise((res,rej)=>{const tx=d.transaction('img',op==='get'?'readonly':'readwrite'); const st=tx.objectStore('img'); const r=op==='get'?st.get(id):op==='put'?st.put(val,id):st.delete(id); r.onsuccess=()=>res(r.result); r.onerror=()=>rej(r.error);});}catch(e){return null} }
+const LOCAL={}, DEF={};
+function useImage(id,im,fresh){ IMG[id]=im; const m=S.maps[id]; if(fresh && m){ m.view=null; } if(id===S.cur){ if(!M().view) fit(); draw(); } }
 function loadBlob(id,blob,fresh){
   const url=URL.createObjectURL(blob); const im=new Image();
-  im.onload=()=>{ IMG[id]=im; const m=S.maps[id]; if(fresh && m){ m.view=null; } if(id===S.cur){ if(!M().view) fit(); draw(); } };
+  im.onload=()=>{ LOCAL[id]=true; useImage(id,im,fresh); };
   im.src=url;
 }
+/* standard image from the website's maps folder; used when this browser has no own image */
+function loadDefault(mp,i=0){
+  if(!mp.file||i>=EXTS.length) return;
+  const im=new Image();
+  im.onload=()=>{ DEF[mp.id]=im; if(!LOCAL[mp.id]){ const m=S.maps[mp.id]; if(m&&mp.width&&Math.abs(m.mapW-mp.width)>1){ rescale(mp.width/m.mapW,m); save(); } useImage(mp.id,im,true); if(mp.id===S.cur) syncUI(); } };
+  im.onerror=()=>loadDefault(mp,i+1);
+  im.src=mp.file+'.'+EXTS[i];
+}
 function setImage(blob){ idb('put',S.cur,blob); loadBlob(S.cur,blob,true); toast('Kartbilde lagt inn for '+MAPS.find(m=>m.id===S.cur).name+'. Kalibrer gjerne skalaen.'); }
-MAPS.forEach(mp=>idb('get',mp.id).then(b=>{ if(b) loadBlob(mp.id,b,false); }));
+MAPS.forEach(mp=>{ idb('get',mp.id).then(b=>{ if(b) loadBlob(mp.id,b,false); }); loadDefault(mp); });
 
 /* ---------- geometry ---------- */
 function worldH(){ const m=M(), im=IMG[S.cur]; return im? m.mapW*im.naturalHeight/im.naturalWidth : m.mapW; }
@@ -389,7 +405,7 @@ cv.addEventListener('wheel',e=>{ e.preventDefault(); const [sx,sy]=pos(e); zoomA
 $('zin').onclick=()=>zoomAt(1.3,cw/2,ch/2); $('zout').onclick=()=>zoomAt(1/1.3,cw/2,ch/2); $('zfit').onclick=()=>{fit(); save(); draw();};
 
 /* calibration */
-function rescale(f){ const m=M(); m.mapW*=f; m.targets.forEach(p=>{p.x*=f;p.y*=f}); m.bases.forEach(p=>{p.x*=f;p.y*=f}); if(m.home){m.home.x*=f;m.home.y*=f;} m.mortars.forEach(p=>{p.x*=f;p.y*=f}); if(m.zone){m.zone.x*=f;m.zone.y*=f;m.zone.r*=f;} if(m.suggest){m.suggest.x*=f;m.suggest.y*=f;} if(m.view) m.view.s/=f; ruler=null; }
+function rescale(f,m=M()){ m.mapW*=f; m.targets.forEach(p=>{p.x*=f;p.y*=f}); m.bases.forEach(p=>{p.x*=f;p.y*=f}); if(m.home){m.home.x*=f;m.home.y*=f;} m.mortars.forEach(p=>{p.x*=f;p.y*=f}); if(m.zone){m.zone.x*=f;m.zone.y*=f;m.zone.r*=f;} if(m.suggest){m.suggest.x*=f;m.suggest.y*=f;} if(m.view) m.view.s/=f; ruler=null; }
 $('calOk').onclick=()=>{ const real=parseFloat($('calDist').value); const d=calib.length===2?dist(...calib[0],...calib[1]):0;
   if(real>0&&d>0){ rescale(real/d); toast('Kalibrert: kartet er nå '+Math.round(M().mapW)+' m bredt'); }
   calib=[]; $('modal').style.display='none'; setTool('base1'); save(); syncUI(); draw(); };
@@ -409,7 +425,10 @@ $('prefer').onchange=e=>{ S.prefer=e.target.value; save(); };
 $('btnReset').onclick=()=>{ const m=M(); m.zone=null; m.targets=[]; m.mortars=[]; m.bases=[]; m.home=null; m.suggest=null; ruler=null; save(); syncUI(); draw(); };
 $('btnUpload').onclick=()=>$('file').click();
 $('file').onchange=e=>{ const f=e.target.files[0]; if(f) setImage(f); e.target.value=''; };
-$('btnClearImg').onclick=()=>{ delete IMG[S.cur]; idb('del',S.cur); M().view=null; draw(); };
+$('btnClearImg').onclick=()=>{ const id=S.cur; idb('del',id); delete LOCAL[id]; M().view=null;
+  if(DEF[id]){ IMG[id]=DEF[id]; const w=MAPS.find(x=>x.id===id).width; if(w && Math.abs(M().mapW-w)>1) rescale(w/M().mapW); toast('Bruker standardkartet fra nettsiden'); }
+  else delete IMG[id];
+  save(); syncUI(); draw(); };
 window.addEventListener('paste',e=>{ for(const it of (e.clipboardData||{}).items||[]) if(it.type.startsWith('image/')){ setImage(it.getAsFile()); e.preventDefault(); return; } });
 main.addEventListener('dragover',e=>{ e.preventDefault(); $('drop').style.display='flex'; });
 main.addEventListener('dragleave',()=>$('drop').style.display='none');
